@@ -7,6 +7,7 @@ import * as events from "aws-cdk-lib/aws-lambda-event-sources";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
+import * as iam from "aws-cdk-lib/aws-iam";
 import { Construct } from "constructs";
 
 export class EDAAppStack extends cdk.Stack {
@@ -27,6 +28,10 @@ export class EDAAppStack extends cdk.Stack {
       receiveMessageWaitTime: cdk.Duration.seconds(10),
     });
 
+    const mailerQ = new sqs.Queue(this, "mailer-queue", {
+      receiveMessageWaitTime: cdk.Duration.seconds(10),
+    });
+
     const newImageTopic = new sns.Topic(this, "NewImageTopic", {
       displayName: "New Image topic",
     });
@@ -38,6 +43,10 @@ export class EDAAppStack extends cdk.Stack {
 
     newImageTopic.addSubscription(
       new subs.SqsSubscription(imageProcessQueue)
+    );
+
+    newImageTopic.addSubscription(
+      new subs.SqsSubscription(mailerQ)
     );
 
     const processImageFn = new lambdanode.NodejsFunction(this, "ProcessImageFn", {
@@ -59,6 +68,31 @@ export class EDAAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, "queueName", {
       value: imageProcessQueue.queueName,
     });
+
+    const mailerFn = new lambdanode.NodejsFunction(this, "mailer-function", {
+      runtime: lambda.Runtime.NODEJS_16_X,
+      memorySize: 1024,
+      timeout: cdk.Duration.seconds(3),
+      entry: `${__dirname}/../lambdas/mailer.ts`,
+    });
+
+    const newImageMailEventSource = new events.SqsEventSource(mailerQ, {
+      batchSize: 5,
+      maxBatchingWindow: cdk.Duration.seconds(5),
+    });
+
+    mailerFn.addEventSource(newImageMailEventSource);
+
+    mailerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          "ses:SendEmail",
+          "ses:SendRawEmail",
+          "ses:SendTemplatedEmail",
+        ],
+        resources: ["*"],
+      })
+    );
   }
 }
-
